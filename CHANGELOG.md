@@ -9,6 +9,7 @@
 - Browser: avoid DevTools port collisions when launching multiple browser runs concurrently.
 - Browser: retry assistant capture without a turn-index floor after reload to reduce stalled-response failures.
 - Browser: enforce a hard assistant-response timeout to avoid hung waits when CDP eval stalls.
+- Browser: reduce focus stealing for `--browser-hide-window` by launching without a startup window and minimizing via CDP.
 
 ## 0.8.4 — 2026-01-04
 
