@@ -12,7 +12,13 @@ import {
   ensurePromptReady,
 } from './pageActions.js';
 import type { BrowserLogger, ChromeClient } from './types.js';
-import { launchChrome, connectToChrome, hideChromeWindow } from './chromeLifecycle.js';
+import {
+  launchChrome,
+  connectToChrome,
+  connectToChromeTarget,
+  hideChromeWindow,
+  minimizeChromeWindow,
+} from './chromeLifecycle.js';
 import { resolveBrowserConfig } from './config.js';
 import { syncCookies } from './cookies.js';
 import { CHATGPT_URL } from './constants.js';
@@ -167,7 +173,27 @@ async function resumeBrowserSessionViaNewChrome(
   }
   const chrome = await launchChrome(resolved, userDataDir, logger);
   const chromeHost = (chrome as unknown as { host?: string }).host ?? '127.0.0.1';
-  const client = await connectToChrome(chrome.port, logger, chromeHost);
+  const createTargetParams =
+    manualLogin || (!resolved.headless && resolved.hideWindow)
+      ? {
+          url: 'about:blank',
+          ...(!resolved.headless && resolved.hideWindow
+            ? {
+                newWindow: true,
+                background: true,
+                windowState: 'minimized' as const,
+                width: 1280,
+                height: 720,
+                left: -10000,
+                top: -10000,
+              }
+            : {}),
+        }
+      : null;
+  const connection = createTargetParams
+    ? await connectToChromeTarget(chrome.port, logger, chromeHost, createTargetParams)
+    : { client: await connectToChrome(chrome.port, logger, chromeHost) };
+  const client = connection.client;
   const { Network, Page, Runtime, DOM } = client;
 
   if (Runtime?.enable) {
@@ -177,7 +203,10 @@ async function resumeBrowserSessionViaNewChrome(
     await DOM.enable();
   }
   if (!resolved.headless && resolved.hideWindow) {
-    await hideChromeWindow(chrome, logger);
+    const applied = await minimizeChromeWindow(client, connection.targetId, logger);
+    if (!applied) {
+      await hideChromeWindow(chrome, logger);
+    }
   }
 
   let appliedCookies = 0;

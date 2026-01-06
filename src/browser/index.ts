@@ -10,8 +10,10 @@ import {
   registerTerminationHooks,
   hideChromeWindow,
   connectToChrome,
+  connectToChromeTarget,
   connectToRemoteChrome,
   closeRemoteChromeTarget,
+  minimizeChromeWindow,
 } from './chromeLifecycle.js';
 import { acquireBrowserLock } from './browserLock.js';
 import { syncCookies } from './cookies.js';
@@ -191,11 +193,39 @@ export async function runBrowserMode(options: BrowserRunOptions): Promise<Browse
     let appliedCookies = 0;
 
     try {
-      if (!config.headless && config.hideWindow) {
-        await hideChromeWindow(chrome, logger);
-      }
       try {
-        client = await connectToChrome(chrome.port, logger, chromeHost);
+        const createTargetParams =
+          manualLogin || (!config.headless && config.hideWindow)
+            ? {
+                url: 'about:blank',
+                ...(!config.headless && config.hideWindow
+                  ? {
+                      newWindow: true,
+                      background: true,
+                      windowState: 'minimized' as const,
+                      width: 1280,
+                      height: 720,
+                      left: -10000,
+                      top: -10000,
+                    }
+                  : {}),
+              }
+            : null;
+        if (createTargetParams) {
+          const connection = await connectToChromeTarget(chrome.port, logger, chromeHost, createTargetParams);
+          client = connection.client;
+          if (connection.targetId) {
+            lastTargetId = connection.targetId;
+          }
+          if (!config.headless && config.hideWindow) {
+            const minimized = await minimizeChromeWindow(client, connection.targetId, logger);
+            if (!minimized) {
+              await hideChromeWindow(chrome, logger);
+            }
+          }
+        } else {
+          client = await connectToChrome(chrome.port, logger, chromeHost);
+        }
       } catch (error) {
         const hint = describeDevtoolsFirewallHint(chromeHost, chrome.port);
         if (hint) {

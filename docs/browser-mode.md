@@ -58,6 +58,7 @@ You can pass the same payload inline (`--browser-inline-cookies '<json or base64
 - `--thinking-time <level>`: set the ChatGPT thinking-time intensity (Thinking/Pro models only). Alias: `--browser-thinking-time`. You can also set a default in `~/.oracle/config.json` via `browser.thinkingTime`.
 - `--browser-port <port>` (alias: `--browser-debug-port`; env: `ORACLE_BROWSER_PORT`/`ORACLE_BROWSER_DEBUG_PORT`): pin the DevTools port (handy on WSL/Windows firewalls). When omitted, a random open port is chosen.
 - `--browser-no-cookie-sync`, `--browser-manual-login` (persistent automation profile + user-driven login), `--browser-headless`, `--browser-hide-window`, `--browser-keep-browser`, and the global `-v/--verbose` flag for detailed automation logs.
+- `--browser-hide-window`: macOS headful only. Starts Chrome without a startup window and creates a background/minimized window to reduce focus stealing (falls back to moving off-screen when needed).
 - `--browser-url`: override ChatGPT base URL if needed.
 - `--browser-attachments <auto|never|always>`: control how `--file` inputs are delivered in browser mode. Default `auto` pastes file contents inline up to ~60k characters and switches to uploads above that.
 - `--browser-inline-files`: alias for `--browser-attachments never` (forces inline paste; never uploads attachments).

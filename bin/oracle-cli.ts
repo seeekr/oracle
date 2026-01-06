@@ -385,7 +385,7 @@ program
     ).hideHelp(),
   )
   .addOption(new Option('--browser-headless', 'Launch Chrome in headless mode.').hideHelp())
-  .addOption(new Option('--browser-hide-window', 'Move the Chrome window off-screen after launch (macOS headful only).').hideHelp())
+  .addOption(new Option('--browser-hide-window', 'Start Chrome without a startup window and keep it minimized/off-screen (macOS headful only).').hideHelp())
   .addOption(new Option('--browser-keep-browser', 'Keep Chrome running after completion.').hideHelp())
   .addOption(
     new Option(
@@ -1303,7 +1303,7 @@ function printDebugHelp(cliName: string): void {
     ['--browser-no-cookie-sync', 'Skip copying cookies from your main profile.'],
     ['--browser-manual-login', 'Skip cookie copy; reuse a persistent automation profile and log in manually.'],
     ['--browser-headless', 'Launch Chrome in headless mode.'],
-    ['--browser-hide-window', 'Move the Chrome window off-screen (macOS headful only).'],
+    ['--browser-hide-window', 'Start Chrome without a startup window and keep it minimized/off-screen (macOS headful only).'],
     ['--browser-keep-browser', 'Leave Chrome running after completion.'],
   ]);
   console.log('');

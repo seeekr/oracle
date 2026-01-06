@@ -6,6 +6,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import CDP from 'chrome-remote-interface';
 import { launch, Launcher, type LaunchedChrome } from 'chrome-launcher';
+import type Protocol from 'devtools-protocol';
 import type { BrowserLogger, ResolvedBrowserConfig, ChromeClient } from './types.js';
 import { cleanupStaleProfileState } from './profileState.js';
 
@@ -155,6 +156,106 @@ export async function connectToChrome(port: number, logger: BrowserLogger, host?
   return client;
 }
 
+export interface ChromeTargetConnection {
+  client: ChromeClient;
+  targetId?: string;
+}
+
+export async function connectToChromeTarget(
+  port: number,
+  logger: BrowserLogger,
+  host?: string,
+  createTarget?: Protocol.Target.CreateTargetRequest | null,
+): Promise<ChromeTargetConnection> {
+  if (!createTarget) {
+    const client = await connectToChrome(port, logger, host);
+    return { client };
+  }
+
+  const url = createTarget.url || 'about:blank';
+  const params: Protocol.Target.CreateTargetRequest = { ...createTarget, url };
+  let targetId: string | undefined;
+  let browserClient: ChromeClient | null = null;
+
+  try {
+    browserClient = await CDP({
+      port,
+      host,
+      target: (targets) => targets.find((target) => target.type === 'browser') ?? targets[0],
+    });
+    if (logger.verbose) {
+      logger('Connected to Chrome DevTools protocol (browser target)');
+    }
+    if (!browserClient.Target?.createTarget) {
+      throw new Error('Target.createTarget unavailable');
+    }
+    try {
+      const created = await browserClient.Target.createTarget(params);
+      targetId = created?.targetId;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (logger.verbose) {
+        logger(`[browser] Target.createTarget failed (${message}); retrying with minimal params.`);
+      }
+      const created = await browserClient.Target.createTarget({ url });
+      targetId = created?.targetId;
+    }
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (logger.verbose) {
+      logger(`[browser] Target.createTarget unavailable (${message}); falling back to CDP.New.`);
+    }
+    try {
+      const target = await CDP.New({ host, port, url });
+      targetId = (target as { id?: string }).id;
+    } catch (fallbackError) {
+      const fallbackMessage = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+      logger(`Failed to create Chrome target (${fallbackMessage}); attaching to existing target.`);
+    }
+  } finally {
+    if (browserClient && typeof browserClient.close === 'function') {
+      await browserClient.close().catch(() => undefined);
+    }
+  }
+
+  if (targetId) {
+    const client = await CDP({ port, host, target: targetId });
+    logger(`Connected to Chrome DevTools protocol (target ${targetId})`);
+    return { client, targetId };
+  }
+
+  const client = await connectToChrome(port, logger, host);
+  return { client };
+}
+
+export async function minimizeChromeWindow(
+  client: ChromeClient,
+  targetId: string | undefined,
+  logger: BrowserLogger,
+): Promise<boolean> {
+  if (!client.Browser?.getWindowForTarget || !client.Browser?.setWindowBounds) {
+    return false;
+  }
+  try {
+    const request = targetId ? { targetId } : {};
+    const { windowId } = await client.Browser.getWindowForTarget(request);
+    await client.Browser.setWindowBounds({
+      windowId,
+      bounds: { windowState: 'minimized' },
+    });
+    if (logger.verbose) {
+      logger('[browser] hide-window: minimized window via CDP.');
+    }
+    return true;
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (logger.verbose) {
+      logger(`[browser] hide-window: failed to minimize window via CDP (${message}).`);
+    }
+    return false;
+  }
+}
+
 export async function connectToRemoteChrome(
   host: string,
   port: number,
@@ -225,6 +326,8 @@ function buildChromeFlags(headless: boolean, debugBindAddress?: string | null, h
   ];
 
   if (hideWindow && !headless) {
+    // Avoid initial window activation when the caller only wants a hidden instance.
+    flags.push('--no-startup-window');
     // Move the window off-screen instead of hiding it to avoid visibility throttling.
     flags.push('--window-position=-10000,-10000');
   }
