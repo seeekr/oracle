@@ -191,15 +191,18 @@ export async function runBrowserMode(options: BrowserRunOptions): Promise<Browse
     let appliedCookies = 0;
 
     try {
-    try {
-      client = await connectToChrome(chrome.port, logger, chromeHost);
-    } catch (error) {
-      const hint = describeDevtoolsFirewallHint(chromeHost, chrome.port);
-      if (hint) {
-        logger(hint);
+      if (!config.headless && config.hideWindow) {
+        await hideChromeWindow(chrome, logger);
       }
-      throw error;
-    }
+      try {
+        client = await connectToChrome(chrome.port, logger, chromeHost);
+      } catch (error) {
+        const hint = describeDevtoolsFirewallHint(chromeHost, chrome.port);
+        if (hint) {
+          logger(hint);
+        }
+        throw error;
+      }
     const disconnectPromise = new Promise<never>((_, reject) => {
       client?.on('disconnect', () => {
         connectionClosedUnexpectedly = true;
@@ -210,10 +213,6 @@ export async function runBrowserMode(options: BrowserRunOptions): Promise<Browse
     const raceWithDisconnect = <T>(promise: Promise<T>): Promise<T> =>
       Promise.race([promise, disconnectPromise]);
     const { Network, Page, Runtime, Input, DOM } = client;
-
-    if (!config.headless && config.hideWindow) {
-      await hideChromeWindow(chrome, logger);
-    }
 
     const domainEnablers = [Network.enable({}), Page.enable(), Runtime.enable()];
     if (DOM && typeof DOM.enable === 'function') {

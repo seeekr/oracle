@@ -116,14 +116,23 @@ export async function hideChromeWindow(chrome: LaunchedChrome, logger: BrowserLo
     logger('Window hiding is only supported on macOS');
     return;
   }
-  if ((process.env.ORACLE_BROWSER_FORCE_HIDE ?? '').trim() !== '1') {
-    if (logger.verbose) {
-      logger('[browser] hide-window: leaving window visible to avoid background throttling.');
-    }
-    return;
-  }
   if (!chrome.pid) {
     logger('Unable to hide window: missing Chrome PID');
+    return;
+  }
+
+  const moved = await moveChromeWindowOffscreen(chrome.pid).catch((error) => {
+    const message = error instanceof Error ? error.message : String(error);
+    if (logger.verbose) {
+      logger(`[browser] hide-window: failed to move window off-screen (${message}).`);
+    }
+    return false;
+  });
+  if (logger.verbose) {
+    logger(`[browser] hide-window: ${moved ? 'moved window off-screen' : 'unable to move window off-screen'}.`);
+  }
+
+  if ((process.env.ORACLE_BROWSER_FORCE_HIDE ?? '').trim() !== '1') {
     return;
   }
   const script = `tell application "System Events"
@@ -233,6 +242,26 @@ function buildChromeFlags(headless: boolean, debugBindAddress?: string | null, h
   }
 
   return flags;
+}
+
+async function moveChromeWindowOffscreen(pid: number): Promise<boolean> {
+  const script = `tell application "System Events"
+    set targetProc to first process whose unix id is ${pid}
+    set moved to false
+    repeat 40 times
+      try
+        if (count of windows of targetProc) > 0 then
+          set position of window 1 of targetProc to {-10000, -10000}
+          set moved to true
+          exit repeat
+        end if
+      end try
+      delay 0.05
+    end repeat
+    return moved
+  end tell`;
+  const { stdout } = await execFileAsync('osascript', ['-e', script]);
+  return stdout.trim() === 'true';
 }
 
 function parseDebugPortEnv(): number | null {
