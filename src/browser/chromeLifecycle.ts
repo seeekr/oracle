@@ -15,7 +15,7 @@ export async function launchChrome(config: ResolvedBrowserConfig, userDataDir: s
   const connectHost = resolveRemoteDebugHost();
   const debugBindAddress = connectHost && connectHost !== '127.0.0.1' ? '0.0.0.0' : connectHost;
   const debugPort = config.debugPort ?? parseDebugPortEnv();
-  const chromeFlags = buildChromeFlags(config.headless ?? false, debugBindAddress);
+  const chromeFlags = buildChromeFlags(config.headless ?? false, debugBindAddress, config.hideWindow ?? false);
   const usePatchedLauncher = Boolean(connectHost && connectHost !== '127.0.0.1');
   const launcher = usePatchedLauncher
     ? await launchWithCustomHost({
@@ -116,6 +116,12 @@ export async function hideChromeWindow(chrome: LaunchedChrome, logger: BrowserLo
     logger('Window hiding is only supported on macOS');
     return;
   }
+  if ((process.env.ORACLE_BROWSER_FORCE_HIDE ?? '').trim() !== '1') {
+    if (logger.verbose) {
+      logger('[browser] hide-window: leaving window visible to avoid background throttling.');
+    }
+    return;
+  }
   if (!chrome.pid) {
     logger('Unable to hide window: missing Chrome PID');
     return;
@@ -187,7 +193,7 @@ export interface RemoteChromeConnection {
   targetId?: string;
 }
 
-function buildChromeFlags(headless: boolean, debugBindAddress?: string | null): string[] {
+function buildChromeFlags(headless: boolean, debugBindAddress?: string | null, hideWindow = false): string[] {
   const flags = [
     '--disable-background-networking',
     '--disable-background-timer-throttling',
@@ -208,6 +214,11 @@ function buildChromeFlags(headless: boolean, debugBindAddress?: string | null): 
     '--lang=en-US',
     '--accept-lang=en-US,en',
   ];
+
+  if (hideWindow && !headless) {
+    // Move the window off-screen instead of hiding it to avoid visibility throttling.
+    flags.push('--window-position=-10000,-10000');
+  }
 
   if (process.platform !== 'win32' && !isWsl()) {
     flags.push('--password-store=basic', '--use-mock-keychain');

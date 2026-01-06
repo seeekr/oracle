@@ -18,9 +18,11 @@ export type ModelName = KnownModelName | (string & {});
 
 export type ProModelName = 'gpt-5.1-pro' | 'gpt-5-pro' | 'gpt-5.2-pro' | 'claude-4.5-sonnet' | 'claude-4.1-opus';
 
-export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh';
+export type ReasoningEffort = 'none' | 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
 
 export type ThinkingTimeLevel = 'light' | 'standard' | 'extended' | 'heavy';
+
+export type ThinkingTimeOption = ThinkingTimeLevel | ReasoningEffort;
 
 export interface AzureOptions {
   endpoint?: string;
@@ -138,6 +140,8 @@ export interface RunOracleOptions {
   browserAttachments?: 'auto' | 'never' | 'always';
   browserInlineFiles?: boolean;
   browserBundleFiles?: boolean;
+  /** Thinking time intensity (CLI --thinking-time). */
+  thinkingTime?: ThinkingTimeOption;
   background?: boolean;
   /** Optional absolute path to save only the assistant's final text output. */
   writeOutputPath?: string;

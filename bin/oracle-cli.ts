@@ -18,7 +18,7 @@ import type { SessionMetadata, SessionMode, BrowserSessionConfig } from '../src/
 import { sessionStore, pruneOldSessions } from '../src/sessionStore.js';
 import { DEFAULT_MODEL, MODEL_CONFIGS, runOracle, readFiles, estimateRequestTokens, buildRequestBody } from '../src/oracle.js';
 import { isKnownModel } from '../src/oracle/modelResolver.js';
-import type { ModelName, PreviewMode, RunOracleOptions } from '../src/oracle.js';
+import type { ModelName, PreviewMode, RunOracleOptions, ThinkingTimeOption } from '../src/oracle.js';
 import { CHATGPT_URL, normalizeChatgptUrl } from '../src/browserMode.js';
 import { createRemoteBrowserExecutor } from '../src/remote/client.js';
 import { createGeminiWebExecutor } from '../src/gemini-web/index.js';
@@ -56,6 +56,7 @@ import { warnIfOversizeBundle } from '../src/cli/bundleWarnings.js';
 import { formatRenderedMarkdown } from '../src/cli/renderOutput.js';
 import { resolveRenderFlag, resolveRenderPlain } from '../src/cli/renderFlags.js';
 import { resolveGeminiModelId } from '../src/oracle/gemini.js';
+import { THINKING_TIME_CHOICES, normalizeThinkingTimeInput, mapThinkingTimeToBrowser } from '../src/oracle/thinkingTime.js';
 import { handleSessionCommand, type StatusOptions, formatSessionCleanupMessage } from '../src/cli/sessionCommand.js';
 import { isErrorLogged } from '../src/cli/errorUtils.js';
 import { handleSessionAlias, handleStatusFlag } from '../src/cli/rootAlias.js';
@@ -121,7 +122,8 @@ interface CliOptions extends OptionValues {
   browserModelStrategy?: 'select' | 'current' | 'ignore';
   browserManualLogin?: boolean;
   browserManualLoginProfileDir?: string;
-  browserThinkingTime?: 'light' | 'standard' | 'extended' | 'heavy';
+  browserThinkingTime?: ThinkingTimeOption;
+  thinkingTime?: ThinkingTimeOption;
   browserAllowCookieErrors?: boolean;
   browserAttachments?: string;
   browserInlineFiles?: boolean;
@@ -245,6 +247,12 @@ program
     '-m, --model <model>',
     'Model to target (gpt-5.2-pro default; also supports gpt-5.1-pro alias). Also gpt-5-pro, gpt-5.1, gpt-5.1-codex API-only, gpt-5.2, gpt-5.2-instant, gpt-5.2-pro, gemini-3-pro, claude-4.5-sonnet, claude-4.1-opus, or ChatGPT labels like "5.2 Thinking" for browser runs).',
     normalizeModelOption,
+  )
+  .addOption(
+    new Option(
+      '--thinking-time <level>',
+      'Thinking time intensity (API reasoning effort + ChatGPT Thinking/Pro UI).',
+    ).choices(THINKING_TIME_CHOICES),
   )
   .addOption(
     new Option(
@@ -386,8 +394,8 @@ program
     ).choices(['select', 'current', 'ignore']),
   )
   .addOption(
-    new Option('--browser-thinking-time <level>', 'Thinking time intensity for Thinking/Pro models: light, standard, extended, heavy.')
-      .choices(['light', 'standard', 'extended', 'heavy'])
+    new Option('--browser-thinking-time <level>', 'Alias for --thinking-time (browser Thinking/Pro models).')
+      .choices(THINKING_TIME_CHOICES)
       .hideHelp(),
   )
   .addOption(
@@ -591,6 +599,7 @@ function buildRunOptions(options: ResolvedCliOptions, overrides: Partial<RunOrac
     browserAttachments: overrides.browserAttachments ?? (options.browserAttachments as 'auto' | 'never' | 'always' | undefined) ?? 'auto',
     browserInlineFiles: overrides.browserInlineFiles ?? options.browserInlineFiles ?? false,
     browserBundleFiles: overrides.browserBundleFiles ?? options.browserBundleFiles ?? false,
+    thinkingTime: overrides.thinkingTime ?? options.thinkingTime,
     background: overrides.background ?? undefined,
     renderPlain: overrides.renderPlain ?? options.renderPlain ?? false,
     writeOutputPath: overrides.writeOutputPath ?? options.writeOutputPath,
@@ -641,6 +650,7 @@ function buildRunOptionsFromMetadata(metadata: SessionMetadata): RunOracleOption
     browserAttachments: stored.browserAttachments,
     browserInlineFiles: stored.browserInlineFiles,
     browserBundleFiles: stored.browserBundleFiles,
+    thinkingTime: stored.thinkingTime,
     background: stored.background,
     renderPlain: stored.renderPlain,
     writeOutputPath: stored.writeOutputPath,
@@ -1003,6 +1013,22 @@ async function runRootCommand(options: CliOptions): Promise<void> {
 
   const getSource = (key: keyof CliOptions) => program.getOptionValueSource?.(key as string) ?? undefined;
   applyBrowserDefaultsFromConfig(options, userConfig, getSource);
+
+  const thinkingTimeSource = getSource('thinkingTime');
+  const browserThinkingTimeSource = getSource('browserThinkingTime');
+  const thinkingTimeFromCli =
+    thinkingTimeSource && thinkingTimeSource !== 'default' ? normalizeThinkingTimeInput(options.thinkingTime) : undefined;
+  const browserThinkingTimeFromCli =
+    browserThinkingTimeSource && browserThinkingTimeSource !== 'default'
+      ? normalizeThinkingTimeInput(options.browserThinkingTime)
+      : undefined;
+  if (thinkingTimeFromCli) {
+    options.thinkingTime = thinkingTimeFromCli;
+    options.browserThinkingTime = mapThinkingTimeToBrowser(thinkingTimeFromCli);
+  } else if (browserThinkingTimeFromCli) {
+    options.thinkingTime = browserThinkingTimeFromCli;
+    options.browserThinkingTime = mapThinkingTimeToBrowser(browserThinkingTimeFromCli);
+  }
 
   const notifications = resolveNotificationSettings({
     cliNotify: options.notify,

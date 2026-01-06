@@ -151,6 +151,10 @@ export async function readAssistantSnapshot(
     const snapshot = value as AssistantSnapshot;
     if (typeof minTurnIndex === 'number' && Number.isFinite(minTurnIndex)) {
       const turnIndex = typeof snapshot.turnIndex === 'number' ? snapshot.turnIndex : null;
+      const turnCount = typeof snapshot.turnCount === 'number' ? snapshot.turnCount : null;
+      if (turnCount !== null && minTurnIndex >= turnCount) {
+        return snapshot;
+      }
       if (turnIndex === null) {
         return snapshot;
       }
@@ -473,6 +477,8 @@ function buildAssistantSnapshotExpression(minTurnIndex?: number): string {
       : -1;
   return `(() => {
     const MIN_TURN_INDEX = ${minTurnLiteral};
+    const TURN_SELECTOR = ${JSON.stringify(CONVERSATION_TURN_SELECTOR)};
+    const totalTurns = document.querySelectorAll(TURN_SELECTOR).length;
     // Learned: the default turn DOM misses project view; keep a fallback extractor.
     ${buildAssistantExtractor('extractAssistantTurn')}
     const extracted = extractAssistantTurn();
@@ -485,11 +491,17 @@ function buildAssistantSnapshotExpression(minTurnIndex?: number): string {
       return normalized.includes('answer now') && (normalized.includes('pro thinking') || normalized.includes('chatgpt said'));
     };
     if (extracted && extracted.text && !isPlaceholder(extracted)) {
-      return extracted;
+      return { ...extracted, turnCount: totalTurns };
     }
     // Fallback for ChatGPT project view: answers can live outside conversation turns.
     const fallback = ${buildMarkdownFallbackExtractor('MIN_TURN_INDEX')};
-    return fallback ?? extracted;
+    if (fallback) {
+      return { ...fallback, turnCount: totalTurns };
+    }
+    if (extracted) {
+      return { ...extracted, turnCount: totalTurns };
+    }
+    return null;
   })()`;
 }
 
@@ -1063,6 +1075,7 @@ interface AssistantSnapshot {
   messageId?: string | null;
   turnId?: string | null;
   turnIndex?: number | null;
+  turnCount?: number | null;
 }
 
 const LANGUAGE_TAGS = new Set(

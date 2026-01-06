@@ -2,6 +2,14 @@
 
 ## 0.8.5 — Unreleased
 
+### Added
+- CLI: add `--thinking-time` (alias `--browser-thinking-time`) to control API reasoning effort and ChatGPT thinking time.
+
+### Fixed
+- Browser: avoid DevTools port collisions when launching multiple browser runs concurrently.
+- Browser: retry assistant capture without a turn-index floor after reload to reduce stalled-response failures.
+- Browser: enforce a hard assistant-response timeout to avoid hung waits when CDP eval stalls.
+
 ## 0.8.4 — 2026-01-04
 
 ### Changed

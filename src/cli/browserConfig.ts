@@ -1,7 +1,8 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { BrowserSessionConfig } from '../sessionStore.js';
-import type { ModelName, ThinkingTimeLevel } from '../oracle.js';
+import type { ModelName, ThinkingTimeOption } from '../oracle.js';
+import { mapThinkingTimeToBrowser } from '../oracle/thinkingTime.js';
 import { CHATGPT_URL, DEFAULT_MODEL_STRATEGY, DEFAULT_MODEL_TARGET, isTemporaryChatUrl, normalizeChatgptUrl, parseDuration } from '../browserMode.js';
 import { normalizeBrowserModelStrategy } from '../browser/modelStrategy.js';
 import type { BrowserModelStrategy } from '../browser/types.js';
@@ -46,7 +47,7 @@ export interface BrowserFlagOptions {
   browserManualLogin?: boolean;
   browserManualLoginProfileDir?: string | null;
   /** Thinking time intensity: 'light', 'standard', 'extended', 'heavy' */
-  browserThinkingTime?: ThinkingTimeLevel;
+  browserThinkingTime?: ThinkingTimeOption;
   browserModelLabel?: string;
   browserModelStrategy?: BrowserModelStrategy;
   browserAllowCookieErrors?: boolean;
@@ -147,7 +148,7 @@ export async function buildBrowserConfig(options: BrowserFlagOptions): Promise<B
     // Allow cookie failures by default so runs can continue without Chrome/Keychain secrets.
     allowCookieErrors: options.browserAllowCookieErrors ?? true,
     remoteChrome,
-    thinkingTime: options.browserThinkingTime,
+    thinkingTime: options.browserThinkingTime ? mapThinkingTimeToBrowser(options.browserThinkingTime) : undefined,
   };
 }
 

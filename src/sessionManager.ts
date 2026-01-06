@@ -4,7 +4,7 @@ import { createWriteStream } from 'node:fs';
 import type { WriteStream } from 'node:fs';
 import net from 'node:net';
 import type { BrowserModelStrategy, CookieParam } from './browser/types.js';
-import type { TransportFailureReason, AzureOptions, ModelName, ThinkingTimeLevel } from './oracle.js';
+import type { TransportFailureReason, AzureOptions, ModelName, ThinkingTimeLevel, ThinkingTimeOption } from './oracle.js';
 import { DEFAULT_MODEL } from './oracle.js';
 import { safeModelSlug } from './oracle/modelResolver.js';
 import { getOracleHomeDir } from './oracleHome.js';
@@ -92,6 +92,7 @@ export interface StoredRunOptions {
   browserAttachments?: 'auto' | 'never' | 'always';
   browserInlineFiles?: boolean;
   browserBundleFiles?: boolean;
+  thinkingTime?: ThinkingTimeOption;
   background?: boolean;
   search?: boolean;
   baseUrl?: string;
@@ -392,6 +393,7 @@ export async function initializeSession(
       browserAttachments: options.browserAttachments,
       browserInlineFiles: options.browserInlineFiles,
       browserBundleFiles: options.browserBundleFiles,
+      thinkingTime: options.thinkingTime,
       background: options.background,
       search: options.search,
       baseUrl: options.baseUrl,

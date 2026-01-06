@@ -33,6 +33,7 @@ import { startHeartbeat } from '../heartbeat.js';
 import { startOscProgress } from './oscProgress.js';
 import { createFsAdapter } from './fsAdapter.js';
 import { resolveGeminiModelId } from './gemini.js';
+import { mapThinkingTimeToReasoning, normalizeThinkingTimeInput } from './thinkingTime.js';
 import { resolveClaudeModelId } from './claude.js';
 import { renderMarkdownAnsi } from '../cli/markdownRenderer.js';
 import { createMarkdownStreamer } from 'markdansi';
@@ -191,10 +192,20 @@ export async function runOracle(options: RunOracleOptions, deps: RunOracleDeps =
 
   const resolverOpenRouterApiKey =
     openRouterFallback || isOpenRouterBaseUrl(baseUrl) ? openRouterApiKey ?? apiKey : undefined;
-  const modelConfig = await resolveModelConfig(options.model, {
+  let modelConfig = await resolveModelConfig(options.model, {
     baseUrl,
     openRouterApiKey: resolverOpenRouterApiKey,
   });
+  const normalizedThinkingTime = normalizeThinkingTimeInput(options.thinkingTime);
+  if (normalizedThinkingTime) {
+    if (modelConfig.provider !== 'openai') {
+      logVerbose(`Thinking time override ignored for provider ${modelConfig.provider}.`);
+    } else {
+      const effort = mapThinkingTimeToReasoning(normalizedThinkingTime);
+      modelConfig = { ...modelConfig, reasoning: { effort } };
+      logVerbose(`Thinking time override: ${normalizedThinkingTime} -> reasoning.effort=${effort}`);
+    }
+  }
   const isLongRunningModel = isProTierModel;
   const supportsBackground = modelConfig.supportsBackground !== false;
   const useBackground = supportsBackground ? options.background ?? isLongRunningModel : false;

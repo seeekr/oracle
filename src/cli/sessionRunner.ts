@@ -30,6 +30,7 @@ import { runMultiModelApiSession } from '../oracle/multiModelRunner.js';
 import { MODEL_CONFIGS, DEFAULT_SYSTEM_PROMPT } from '../oracle/config.js';
 import { isKnownModel } from '../oracle/modelResolver.js';
 import { resolveModelConfig } from '../oracle/modelResolver.js';
+import { mapThinkingTimeToReasoning, normalizeThinkingTimeInput } from '../oracle/thinkingTime.js';
 import { buildPrompt, buildRequestBody } from '../oracle/request.js';
 import { estimateRequestTokens } from '../oracle/tokenEstimate.js';
 import { formatTokenEstimate, formatTokenValue } from '../oracle/runUtils.js';
@@ -144,10 +145,14 @@ export async function performSessionRun({
       if (!primaryModel) {
         throw new Error('Missing model name for multi-model run.');
       }
-      const modelConfig = await resolveModelConfig(primaryModel, {
+      let modelConfig = await resolveModelConfig(primaryModel, {
         baseUrl: runOptions.baseUrl,
         openRouterApiKey: process.env.OPENROUTER_API_KEY,
       });
+      const normalizedThinkingTime = normalizeThinkingTimeInput(runOptions.thinkingTime);
+      if (normalizedThinkingTime && modelConfig.provider === 'openai') {
+        modelConfig = { ...modelConfig, reasoning: { effort: mapThinkingTimeToReasoning(normalizedThinkingTime) } };
+      }
       const files = await readFiles(runOptions.file ?? [], { cwd });
       const promptWithFiles = buildPrompt(runOptions.prompt, files, cwd);
       const requestBody = buildRequestBody({

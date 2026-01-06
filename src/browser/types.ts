@@ -82,7 +82,13 @@ export interface BrowserRunResult {
 export type ResolvedBrowserConfig = Required<
   Omit<
     BrowserAutomationConfig,
-    'chromeProfile' | 'chromePath' | 'chromeCookiePath' | 'desiredModel' | 'remoteChrome' | 'thinkingTime' | 'modelStrategy'
+    | 'chromeProfile'
+    | 'chromePath'
+    | 'chromeCookiePath'
+    | 'desiredModel'
+    | 'remoteChrome'
+    | 'thinkingTime'
+    | 'modelStrategy'
   >
 > & {
   chromeProfile?: string | null;

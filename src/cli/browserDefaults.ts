@@ -1,6 +1,6 @@
 import { normalizeChatgptUrl, CHATGPT_URL } from '../browserMode.js';
 import type { UserConfig } from '../config.js';
-import type { ThinkingTimeLevel } from '../oracle.js';
+import type { ThinkingTimeOption } from '../oracle.js';
 import type { BrowserModelStrategy } from '../browser/types.js';
 
 export interface BrowserDefaultsOptions {
@@ -17,7 +17,7 @@ export interface BrowserDefaultsOptions {
   browserHideWindow?: boolean;
   browserKeepBrowser?: boolean;
   browserModelStrategy?: BrowserModelStrategy;
-  browserThinkingTime?: ThinkingTimeLevel;
+  browserThinkingTime?: ThinkingTimeOption;
   browserManualLogin?: boolean;
   browserManualLoginProfileDir?: string | null;
 }

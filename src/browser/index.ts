@@ -1,4 +1,5 @@
 import { mkdtemp, rm, mkdir } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import os from 'node:os';
 import net from 'node:net';
@@ -12,6 +13,7 @@ import {
   connectToRemoteChrome,
   closeRemoteChromeTarget,
 } from './chromeLifecycle.js';
+import { acquireBrowserLock } from './browserLock.js';
 import { syncCookies } from './cookies.js';
 import {
   navigateToChatGPT,
@@ -38,7 +40,7 @@ import { formatElapsed } from '../oracle/format.js';
 import { CHATGPT_URL, CONVERSATION_TURN_SELECTOR, DEFAULT_MODEL_STRATEGY } from './constants.js';
 import type { LaunchedChrome } from 'chrome-launcher';
 import { BrowserAutomationError } from '../oracle/errors.js';
-import { alignPromptEchoPair, buildPromptEchoMatcher } from './reattachHelpers.js';
+import { alignPromptEchoPair, buildPromptEchoMatcher, withTimeout } from './reattachHelpers.js';
 import {
   cleanupStaleProfileState,
   readChromePid,
@@ -71,6 +73,9 @@ export async function runBrowserMode(options: BrowserRunOptions): Promise<Browse
     logger.sessionLog = options.log.sessionLog;
   }
   const runtimeHintCb = options.runtimeHintCb;
+  let chrome: LaunchedChrome | null = null;
+  let chromeHost: string | undefined;
+  let userDataDir: string | undefined;
   let lastTargetId: string | undefined;
   let lastUrl: string | undefined;
   const emitRuntimeHint = async (): Promise<void> => {
@@ -104,8 +109,8 @@ export async function runBrowserMode(options: BrowserRunOptions): Promise<Browse
     );
   }
 
-  if (!config.remoteChrome && !config.manualLogin) {
-    const preferredPort = config.debugPort ?? DEFAULT_DEBUG_PORT;
+  if (!config.remoteChrome && !config.manualLogin && config.debugPort != null) {
+    const preferredPort = config.debugPort;
     const availablePort = await pickAvailableDebugPort(preferredPort, logger);
     if (availablePort !== preferredPort) {
       logger(`DevTools port ${preferredPort} busy; using ${availablePort} to avoid attaching to stray Chrome.`);
@@ -114,76 +119,78 @@ export async function runBrowserMode(options: BrowserRunOptions): Promise<Browse
   }
 
   // Remote Chrome mode - connect to existing browser
-  if (config.remoteChrome) {
-    // Warn about ignored local-only options
-    if (config.headless || config.hideWindow || config.keepBrowser || config.chromePath) {
-      logger(
-        'Note: --remote-chrome ignores local Chrome flags ' +
-        '(--browser-headless, --browser-hide-window, --browser-keep-browser, --browser-chrome-path).'
-      );
+  const releaseLock = await acquireBrowserLock(config, logger);
+  try {
+    if (config.remoteChrome) {
+      // Warn about ignored local-only options
+      if (config.headless || config.hideWindow || config.keepBrowser || config.chromePath) {
+        logger(
+          'Note: --remote-chrome ignores local Chrome flags ' +
+          '(--browser-headless, --browser-hide-window, --browser-keep-browser, --browser-chrome-path).'
+        );
+      }
+
+      return await runRemoteBrowserMode(promptText, attachments, config, logger, options);
     }
 
-    return runRemoteBrowserMode(promptText, attachments, config, logger, options);
-  }
-
-  const manualLogin = Boolean(config.manualLogin);
-  const manualProfileDir = config.manualLoginProfileDir
-    ? path.resolve(config.manualLoginProfileDir)
-    : path.join(os.homedir(), '.oracle', 'browser-profile');
-  const userDataDir = manualLogin
-    ? manualProfileDir
-    : await mkdtemp(path.join(await resolveUserDataBaseDir(), 'oracle-browser-'));
-  if (manualLogin) {
-    // Learned: manual login reuses a persistent profile so cookies/SSO survive.
-    await mkdir(userDataDir, { recursive: true });
-    logger(`Manual login mode enabled; reusing persistent profile at ${userDataDir}`);
-  } else {
-    logger(`Created temporary Chrome profile at ${userDataDir}`);
-  }
-
-  const effectiveKeepBrowser = Boolean(config.keepBrowser);
-  const reusedChrome = manualLogin ? await maybeReuseRunningChrome(userDataDir, logger) : null;
-  const chrome =
-    reusedChrome ??
-    (await launchChrome(
-      {
-        ...config,
-        remoteChrome: config.remoteChrome,
-      },
-      userDataDir,
-      logger,
-    ));
-  const chromeHost = (chrome as unknown as { host?: string }).host ?? '127.0.0.1';
-  // Persist profile state so future manual-login runs can reuse this Chrome.
-  if (manualLogin && chrome.port) {
-    await writeDevToolsActivePort(userDataDir, chrome.port);
-    if (!reusedChrome && chrome.pid) {
-      await writeChromePid(userDataDir, chrome.pid);
+    const manualLogin = Boolean(config.manualLogin);
+    const manualProfileDir = config.manualLoginProfileDir
+      ? path.resolve(config.manualLoginProfileDir)
+      : path.join(os.homedir(), '.oracle', 'browser-profile');
+    userDataDir = manualLogin
+      ? manualProfileDir
+      : await mkdtemp(path.join(await resolveUserDataBaseDir(), 'oracle-browser-'));
+    if (manualLogin) {
+      // Learned: manual login reuses a persistent profile so cookies/SSO survive.
+      await mkdir(userDataDir, { recursive: true });
+      logger(`Manual login mode enabled; reusing persistent profile at ${userDataDir}`);
+    } else {
+      logger(`Created temporary Chrome profile at ${userDataDir}`);
     }
-  }
-  let removeTerminationHooks: (() => void) | null = null;
-  try {
-    removeTerminationHooks = registerTerminationHooks(chrome, userDataDir, effectiveKeepBrowser, logger, {
-      isInFlight: () => runStatus !== 'complete',
-      emitRuntimeHint,
-      preserveUserDataDir: manualLogin,
-    });
-  } catch {
-    // ignore failure; cleanup still happens below
-  }
 
-  let client: Awaited<ReturnType<typeof connectToChrome>> | null = null;
-  const startedAt = Date.now();
-  let answerText = '';
-  let answerMarkdown = '';
-  let answerHtml = '';
-  let runStatus: 'attempted' | 'complete' = 'attempted';
-  let connectionClosedUnexpectedly = false;
-  let stopThinkingMonitor: (() => void) | null = null;
-  let removeDialogHandler: (() => void) | null = null;
-  let appliedCookies = 0;
+    const effectiveKeepBrowser = Boolean(config.keepBrowser);
+    const reusedChrome = manualLogin ? await maybeReuseRunningChrome(userDataDir, logger) : null;
+    chrome =
+      reusedChrome ??
+      (await launchChrome(
+        {
+          ...config,
+          remoteChrome: config.remoteChrome,
+        },
+        userDataDir,
+        logger,
+      ));
+    chromeHost = (chrome as unknown as { host?: string }).host ?? '127.0.0.1';
+    // Persist profile state so future manual-login runs can reuse this Chrome.
+    if (manualLogin && chrome.port) {
+      await writeDevToolsActivePort(userDataDir, chrome.port);
+      if (!reusedChrome && chrome.pid) {
+        await writeChromePid(userDataDir, chrome.pid);
+      }
+    }
+    let removeTerminationHooks: (() => void) | null = null;
+    try {
+      removeTerminationHooks = registerTerminationHooks(chrome, userDataDir, effectiveKeepBrowser, logger, {
+        isInFlight: () => runStatus !== 'complete',
+        emitRuntimeHint,
+        preserveUserDataDir: manualLogin,
+      });
+    } catch {
+      // ignore failure; cleanup still happens below
+    }
 
-  try {
+    let client: Awaited<ReturnType<typeof connectToChrome>> | null = null;
+    const startedAt = Date.now();
+    let answerText = '';
+    let answerMarkdown = '';
+    let answerHtml = '';
+    let runStatus: 'attempted' | 'complete' = 'attempted';
+    let connectionClosedUnexpectedly = false;
+    let stopThinkingMonitor: (() => void) | null = null;
+    let removeDialogHandler: (() => void) | null = null;
+    let appliedCookies = 0;
+
+    try {
     try {
       client = await connectToChrome(chrome.port, logger, chromeHost);
     } catch (error) {
@@ -240,6 +247,9 @@ export async function runBrowserMode(options: BrowserRunOptions): Promise<Browse
       waitMs: config.cookieSyncWaitMs ?? 0,
     });
       appliedCookies = cookieCount;
+      if (appliedCookies > 0) {
+        await rotateDeviceIdCookie(Network, config.url, logger);
+      }
       if (config.inlineCookies && cookieCount === 0) {
         throw new Error('No inline cookies were applied; aborting before navigation.');
       }
@@ -551,20 +561,15 @@ export async function runBrowserMode(options: BrowserRunOptions): Promise<Browse
       }
       return null;
     };
-    let answer = await raceWithDisconnect(
-      waitForAssistantResponseWithReload(
-        Runtime,
-        Page,
-        config.timeoutMs,
-        logger,
-        baselineTurns ?? undefined,
-      ),
-    );
-    // Ensure we store the final conversation URL even if the UI updated late.
-    await updateConversationHint('post-response', 15_000);
-    const baselineNormalized = baselineAssistantText ? normalizeForComparison(baselineAssistantText) : '';
-    if (baselineNormalized) {
-      const normalizedAnswer = normalizeForComparison(answer.text ?? '');
+    const refreshIfStaleResponse = async (
+      currentAnswer: { text: string; html?: string; meta: { turnId?: string | null; messageId?: string | null } },
+      baselineText: string | null,
+    ) => {
+      const baselineNormalized = baselineText ? normalizeForComparison(baselineText) : '';
+      if (!baselineNormalized) {
+        return currentAnswer;
+      }
+      const normalizedAnswer = normalizeForComparison(currentAnswer.text ?? '');
       const baselinePrefix =
         baselineNormalized.length >= 80
           ? baselineNormalized.slice(0, Math.min(200, baselineNormalized.length))
@@ -576,10 +581,23 @@ export async function runBrowserMode(options: BrowserRunOptions): Promise<Browse
         logger('Detected stale assistant response; waiting for new response...');
         const refreshed = await waitForFreshAssistantResponse(baselineNormalized, 15_000);
         if (refreshed) {
-          answer = refreshed;
+          return refreshed;
         }
       }
-    }
+      return currentAnswer;
+    };
+    let answer = await raceWithDisconnect(
+      waitForAssistantResponseWithReload(
+        Runtime,
+        Page,
+        config.timeoutMs,
+        logger,
+        baselineTurns ?? undefined,
+      ),
+    );
+    answer = await refreshIfStaleResponse(answer, baselineAssistantText);
+    // Ensure we store the final conversation URL even if the UI updated late.
+    await updateConversationHint('post-response', 15_000);
     answerText = answer.text;
     answerHtml = answer.html ?? '';
     const copiedMarkdown = await raceWithDisconnect(
@@ -791,6 +809,11 @@ export async function runBrowserMode(options: BrowserRunOptions): Promise<Browse
       }
     } else if (!connectionClosedUnexpectedly) {
       logger(`Chrome left running on port ${chrome.port} with profile ${userDataDir}`);
+    }
+  }
+  } finally {
+    if (releaseLock) {
+      await releaseLock().catch(() => undefined);
     }
   }
 }
@@ -1044,7 +1067,6 @@ async function runRemoteBrowserMode(
         },
       });
     }
-
     const submitOnce = async (prompt: string, submissionAttachments: BrowserAttachment[]) => {
       const baselineSnapshot = await readAssistantSnapshot(Runtime).catch(() => null);
       const baselineAssistantText =
@@ -1138,16 +1160,15 @@ async function runRemoteBrowserMode(
       }
       return null;
     };
-    let answer = await waitForAssistantResponseWithReload(
-      Runtime,
-      Page,
-      config.timeoutMs,
-      logger,
-      baselineTurns ?? undefined,
-    );
-    const baselineNormalized = baselineAssistantText ? normalizeForComparison(baselineAssistantText) : '';
-    if (baselineNormalized) {
-      const normalizedAnswer = normalizeForComparison(answer.text ?? '');
+    const refreshIfStaleResponse = async (
+      currentAnswer: { text: string; html?: string; meta: { turnId?: string | null; messageId?: string | null } },
+      baselineText: string | null,
+    ) => {
+      const baselineNormalized = baselineText ? normalizeForComparison(baselineText) : '';
+      if (!baselineNormalized) {
+        return currentAnswer;
+      }
+      const normalizedAnswer = normalizeForComparison(currentAnswer.text ?? '');
       const baselinePrefix =
         baselineNormalized.length >= 80
           ? baselineNormalized.slice(0, Math.min(200, baselineNormalized.length))
@@ -1159,10 +1180,19 @@ async function runRemoteBrowserMode(
         logger('Detected stale assistant response; waiting for new response...');
         const refreshed = await waitForFreshAssistantResponse(baselineNormalized, 15_000);
         if (refreshed) {
-          answer = refreshed;
+          return refreshed;
         }
       }
-    }
+      return currentAnswer;
+    };
+    let answer = await waitForAssistantResponseWithReload(
+      Runtime,
+      Page,
+      config.timeoutMs,
+      logger,
+      baselineTurns ?? undefined,
+    );
+    answer = await refreshIfStaleResponse(answer, baselineAssistantText);
     answerText = answer.text;
     answerHtml = answer.html ?? '';
 
@@ -1350,20 +1380,69 @@ async function waitForAssistantResponseWithReload(
   logger: BrowserLogger,
   minTurnIndex?: number,
 ) {
+  const deadline = Date.now() + timeoutMs;
+  const remainingMs = () => Math.max(0, deadline - Date.now());
+  const runAttempt = async (label: string, minTurnOverride?: number) => {
+    const remaining = remainingMs();
+    if (remaining <= 0) {
+      throw new Error('assistant-response-timeout');
+    }
+    return await withTimeout(
+      waitForAssistantResponse(Runtime, remaining, logger, minTurnOverride),
+      remaining + 500,
+      label,
+    );
+  };
+  const retryWithoutTurnFloor = async () => {
+    if (typeof minTurnIndex !== 'number' || !Number.isFinite(minTurnIndex)) {
+      return null;
+    }
+    const remaining = remainingMs();
+    if (remaining <= 0) {
+      return null;
+    }
+    const fallbackTimeoutMs = Math.min(remaining, 30_000);
+    logger('Assistant response stalled; retrying without turn index floor');
+    try {
+      return await withTimeout(
+        waitForAssistantResponse(Runtime, fallbackTimeoutMs, logger, undefined),
+        fallbackTimeoutMs + 500,
+        'assistant-response-timeout',
+      );
+    } catch {
+      return null;
+    }
+  };
   try {
-    return await waitForAssistantResponse(Runtime, timeoutMs, logger, minTurnIndex);
+    return await runAttempt('assistant-response-timeout', minTurnIndex);
   } catch (error) {
     if (!shouldReloadAfterAssistantError(error)) {
+      const fallback = await retryWithoutTurnFloor().catch(() => null);
+      if (fallback) {
+        return fallback;
+      }
       throw error;
     }
     const conversationUrl = await readConversationUrl(Runtime);
     if (!conversationUrl || !isConversationUrl(conversationUrl)) {
+      const fallback = await retryWithoutTurnFloor().catch(() => null);
+      if (fallback) {
+        return fallback;
+      }
       throw error;
     }
     logger('Assistant response stalled; reloading conversation and retrying once');
     await Page.navigate({ url: conversationUrl });
     await delay(1000);
-    return await waitForAssistantResponse(Runtime, timeoutMs, logger, minTurnIndex);
+    try {
+      return await runAttempt('assistant-response-timeout', minTurnIndex);
+    } catch (reloadError) {
+      const fallback = await retryWithoutTurnFloor().catch(() => null);
+      if (fallback) {
+        return fallback;
+      }
+      throw reloadError;
+    }
   }
 }
 
@@ -1416,6 +1495,31 @@ async function readConversationTurnCount(
     }
   }
   return null;
+}
+
+async function rotateDeviceIdCookie(
+  Network: ChromeClient['Network'],
+  url: string,
+  logger: BrowserLogger,
+): Promise<void> {
+  try {
+    // Reset per-device cookie so concurrent runs don't share a device identity.
+    await Network.deleteCookies({ name: 'oai-did', url });
+    const did = randomUUID();
+    const result = await Network.setCookie({
+      name: 'oai-did',
+      value: did,
+      url,
+    });
+    if (result?.success && logger.verbose) {
+      logger('[browser] Rotated device identifier cookie (oai-did) for this session.');
+    }
+  } catch (error) {
+    if (logger.verbose) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger(`[browser] Failed to rotate device identifier cookie: ${message}`);
+    }
+  }
 }
 
 function isConversationUrl(url: string): boolean {

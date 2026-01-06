@@ -70,7 +70,7 @@ CLI flags → `config.json` → environment → built-in defaults.
 - `ORACLE_NOTIFY*` env vars still layer on top of the config’s `notify` block.
 - `sessionRetentionHours` controls the default value for `--retain-hours`. When unset, `ORACLE_RETAIN_HOURS` (if present) becomes the fallback, and the CLI flag still wins over both.
 - `browser.chatgptUrl` accepts either the root ChatGPT URL (`https://chatgpt.com/`) or a folder/workspace URL (e.g., `https://chatgpt.com/g/.../project`); `browser.url` remains as a legacy alias.
-- Browser automation defaults can be set under `browser.*`, including `browser.manualLogin`, `browser.manualLoginProfileDir`, and `browser.thinkingTime` (CLI override: `--browser-thinking-time`). On Windows, `browser.manualLogin` defaults to `true` when omitted.
+- Browser automation defaults can be set under `browser.*`, including `browser.manualLogin`, `browser.manualLoginProfileDir`, and `browser.thinkingTime` (CLI override: `--thinking-time`, alias `--browser-thinking-time`). On Windows, `browser.manualLogin` defaults to `true` when omitted.
 
 If the config is missing or invalid, Oracle falls back to defaults and prints a warning for parse errors.
 
